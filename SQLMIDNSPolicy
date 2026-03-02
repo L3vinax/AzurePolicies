@@ -1,0 +1,289 @@
+{
+  "mode": "Indexed",
+  "policyRule": {
+    "if": {
+      "allOf": [
+        {
+          "field": "type",
+          "equals": "Microsoft.Network/privateEndpoints"
+        },
+        {
+          "count": {
+            "field": "Microsoft.Network/privateEndpoints/privateLinkServiceConnections[*]",
+            "where": {
+              "allOf": [
+                {
+                  "field": "Microsoft.Network/privateEndpoints/privateLinkServiceConnections[*].privateLinkServiceId",
+                  "contains": "Microsoft.Sql/managedInstances"
+                },
+                {
+                  "field": "Microsoft.Network/privateEndpoints/privateLinkServiceConnections[*].groupIds[*]",
+                  "equals": "managedInstance"
+                }
+              ]
+            }
+          },
+          "greaterOrEquals": 1
+        }
+      ]
+    },
+    "then": {
+      "effect": "[parameters('effect')]",
+      "details": {
+        "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+        "roleDefinitionIds": [
+          "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+          "/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7",
+          "/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f"
+        ],
+        "existenceCondition": {
+          "allOf": [
+            {
+              "field": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/privateDnsZoneConfigs[*].privateDnsZoneId",
+              "exists": "true"
+            }
+          ]
+        },
+        "deployment": {
+          "properties": {
+            "mode": "incremental",
+            "parameters": {
+              "privateDnsZoneResourceGroup": {
+                "value": "[parameters('privateDnsZoneResourceGroup')]"
+              },
+              "hubVNetResourceId": {
+                "value": "[parameters('hubVNetResourceId')]"
+              },
+              "privateEndpointName": {
+                "value": "[field('name')]"
+              },
+              "privateEndpointLocation": {
+                "value": "[field('location')]"
+              },
+              "privateEndpointResourceGroup": {
+                "value": "[resourceGroup().name]"
+              },
+              "privateLinkServiceId": {
+                "value": "[first(field('Microsoft.Network/privateEndpoints/privateLinkServiceConnections[*].privateLinkServiceId'))]"
+              }
+            },
+            "template": {
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "privateDnsZoneResourceGroup": {
+                  "type": "string"
+                },
+                "hubVNetResourceId": {
+                  "type": "string"
+                },
+                "privateEndpointName": {
+                  "type": "string"
+                },
+                "privateEndpointLocation": {
+                  "type": "string"
+                },
+                "privateEndpointResourceGroup": {
+                  "type": "string"
+                },
+                "privateLinkServiceId": {
+                  "type": "string"
+                }
+              },
+              "variables": {
+                "managedInstanceName": "[last(split(parameters('privateLinkServiceId'), '/'))]",
+                "managedInstanceResourceGroup": "[split(parameters('privateLinkServiceId'), '/')[4]]",
+                "managedInstanceSubscription": "[split(parameters('privateLinkServiceId'), '/')[2]]",
+                "managedInstanceResourceId": "[parameters('privateLinkServiceId')]"
+              },
+              "resources": [
+                {
+                  "type": "Microsoft.Resources/deployments",
+                  "apiVersion": "2021-04-01",
+                  "name": "GetManagedInstanceDnsZone",
+                  "subscriptionId": "[variables('managedInstanceSubscription')]",
+                  "resourceGroup": "[variables('managedInstanceResourceGroup')]",
+                  "properties": {
+                    "mode": "Incremental",
+                    "template": {
+                      "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                      "contentVersion": "1.0.0.0",
+                      "resources": [],
+                      "outputs": {
+                        "dnsZoneName": {
+                          "type": "string",
+                          "value": "[concat('privatelink.', reference(variables('managedInstanceResourceId'), '2021-11-01').dnsZone, '.database.windows.net')]"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "Microsoft.Resources/deployments",
+                  "apiVersion": "2021-04-01",
+                  "name": "DeployPrivateDnsZone",
+                  "resourceGroup": "[parameters('privateDnsZoneResourceGroup')]",
+                  "dependsOn": [
+                    "GetManagedInstanceDnsZone"
+                  ],
+                  "properties": {
+                    "mode": "Incremental",
+                    "expressionEvaluationOptions": {
+                      "scope": "inner"
+                    },
+                    "parameters": {
+                      "privateDnsZoneName": {
+                        "value": "[reference('GetManagedInstanceDnsZone').outputs.dnsZoneName.value]"
+                      },
+                      "hubVNetResourceId": {
+                        "value": "[parameters('hubVNetResourceId')]"
+                      }
+                    },
+                    "template": {
+                      "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                      "contentVersion": "1.0.0.0",
+                      "parameters": {
+                        "privateDnsZoneName": {
+                          "type": "string"
+                        },
+                        "hubVNetResourceId": {
+                          "type": "string"
+                        }
+                      },
+                      "variables": {
+                        "vnetLinkName": "[concat(parameters('privateDnsZoneName'), '-link')]"
+                      },
+                      "resources": [
+                        {
+                          "type": "Microsoft.Network/privateDnsZones",
+                          "apiVersion": "2020-06-01",
+                          "name": "[parameters('privateDnsZoneName')]",
+                          "location": "global",
+                          "properties": {}
+                        },
+                        {
+                          "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                          "apiVersion": "2020-06-01",
+                          "name": "[concat(parameters('privateDnsZoneName'), '/', variables('vnetLinkName'))]",
+                          "location": "global",
+                          "dependsOn": [
+                            "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                          ],
+                          "properties": {
+                            "virtualNetwork": {
+                              "id": "[parameters('hubVNetResourceId')]"
+                            },
+                            "registrationEnabled": false
+                          }
+                        }
+                      ],
+                      "outputs": {
+                        "privateDnsZoneId": {
+                          "type": "string",
+                          "value": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "Microsoft.Resources/deployments",
+                  "apiVersion": "2021-04-01",
+                  "name": "AssociateDnsZoneGroup",
+                  "resourceGroup": "[parameters('privateEndpointResourceGroup')]",
+                  "dependsOn": [
+                    "DeployPrivateDnsZone"
+                  ],
+                  "properties": {
+                    "mode": "Incremental",
+                    "expressionEvaluationOptions": {
+                      "scope": "inner"
+                    },
+                    "parameters": {
+                      "privateEndpointName": {
+                        "value": "[parameters('privateEndpointName')]"
+                      },
+                      "privateEndpointLocation": {
+                        "value": "[parameters('privateEndpointLocation')]"
+                      },
+                      "privateDnsZoneName": {
+                        "value": "[reference('GetManagedInstanceDnsZone').outputs.dnsZoneName.value]"
+                      },
+                      "privateDnsZoneId": {
+                        "value": "[reference('DeployPrivateDnsZone').outputs.privateDnsZoneId.value]"
+                      }
+                    },
+                    "template": {
+                      "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                      "contentVersion": "1.0.0.0",
+                      "parameters": {
+                        "privateEndpointName": {
+                          "type": "string"
+                        },
+                        "privateEndpointLocation": {
+                          "type": "string"
+                        },
+                        "privateDnsZoneName": {
+                          "type": "string"
+                        },
+                        "privateDnsZoneId": {
+                          "type": "string"
+                        }
+                      },
+                      "resources": [
+                        {
+                          "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                          "apiVersion": "2021-05-01",
+                          "name": "[concat(parameters('privateEndpointName'), '/default')]",
+                          "location": "[parameters('privateEndpointLocation')]",
+                          "properties": {
+                            "privateDnsZoneConfigs": [
+                              {
+                                "name": "[parameters('privateDnsZoneName')]",
+                                "properties": {
+                                  "privateDnsZoneId": "[parameters('privateDnsZoneId')]"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "parameters": {
+    "effect": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Effect",
+        "description": "Enable or disable the execution of the policy"
+      },
+      "allowedValues": [
+        "DeployIfNotExists",
+        "Disabled"
+      ],
+      "defaultValue": "DeployIfNotExists"
+    },
+    "hubVNetResourceId": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Hub VNet Resource ID",
+        "description": "Resource ID of the hub VNet to link Private DNS Zones to"
+      }
+    },
+    "privateDnsZoneResourceGroup": {
+      "type": "String",
+      "metadata": {
+        "displayName": "Private DNS Zone Resource Group",
+        "description": "Resource group where Private DNS Zones will be created"
+      }
+    }
+  }
+}
